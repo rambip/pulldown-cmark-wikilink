@@ -1,0 +1,8 @@
+[package]
+name = "pulldown-cmark-wikilink"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+pulldown-cmark = { git = "https://github.com/rhysd/pulldown-cmark.git", branch="math"}
