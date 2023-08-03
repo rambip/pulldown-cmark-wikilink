@@ -78,17 +78,14 @@ impl<'a, 'b> Parser<'a, 'b> {
         match self.events.next()? {
             (Event::Text(_), r) => {
                 let start = r.start;
-                let end = {
-                    let mut end = r.end;
-                    while let Some((Event::Text(_) ,r2)) = self.events.peek(){
-                        end = r2.end;
-                        self.events.next();
-                    }
-                    end
+                let mut end = r.end;
+                while let Some((Event::Text(_) ,r2)) = self.events.peek(){
+                    end = r2.end;
+                    self.events.next();
                 };
                 self.lexer = Lexer::new_at(&self.source[start..end], r.start)
                     .peekable();
-                Some(Ok(self.lexer.peek().unwrap()))
+                self.peek_token()
             },
             t => Some(Err(t)),
         }
@@ -294,5 +291,26 @@ mod tests {
                 End(TagEnd::Paragraph),
             ]
         );
+    }
+
+    #[test]
+    fn empty_text_events(){
+        let s = r#"
+| unstyled | styled    |
+| :-----:  | ------    |
+| a  | **a**  |
+| b  | **b**  |
+| c  | **c**  |
+"#;
+
+        let empty_text_events = _Parser::new_ext(s, Options::all())
+            .into_offset_iter()
+            .filter(|(x, _)| match x {Event::Text(t) if t.is_empty() => true , _ => false});
+
+        assert_eq!(empty_text_events.count(), 3);
+
+        let _events: Vec<_> = 
+            Parser::new_ext(s, Options::all(), true)
+            .collect();
     }
 }
