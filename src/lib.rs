@@ -135,11 +135,12 @@ impl<'a, 'b> Parser<'a, 'b> {
         let url_pos = self.parse_wikilink_first_field()
             .map_err(|x| x.extend_before(tag_pos.clone()))?;
 
-        let opening_tag = Event::Start(Tag::Link(
-                LinkType::Inline,
-                self.source[url_pos.clone()].into(),
-                "wiki".into(),
-        ));
+        let opening_tag = Event::Start(Tag::Link{
+                link_type: LinkType::Inline,
+                dest_url: self.source[url_pos.clone()].into(),
+                title: "wiki".into(),
+                id: "".into(),
+        });
 
         let closing_tag = Event::End(TagEnd::Link);
 

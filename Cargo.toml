@@ -5,4 +5,4 @@ edition = "2021"
 
 
 [dependencies]
-pulldown-cmark = { git = "https://github.com/rhysd/pulldown-cmark.git", branch="math"}
+pulldown-cmark = { git = "https://github.com/ollpu/pulldown-cmark.git", branch="alt-math" }
