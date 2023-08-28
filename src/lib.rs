@@ -259,7 +259,8 @@ mod tests {
         assert_eq!(events, vec![
                    (Start(Tag::Paragraph), 0..28),
                    (Text("here is a wikilink: ".into()), 0..20),
-                   (Start(Tag::Link(Inline, "link".into(), "wiki".into())), 20..28),
+                   (Start(Tag::Link{link_type: Inline, dest_url: "link".into(), title: "wiki".into(), id: "".into()}), 
+                    20..28),
                    (Text("link".into()), 22..26),
                    (End(TagEnd::Link), 20..28),
                    (End(TagEnd::Paragraph), 0..28),
@@ -286,7 +287,7 @@ mod tests {
             events,
             vec![
                 Start(Tag::Paragraph),
-                Start(Tag::Link(Inline, "the url".into(), "wiki".into())), 
+                Start(Tag::Link{link_type: Inline, dest_url: "the url".into(), title: "wiki".into(), id: "".into()}), 
                 Text(" with a strange content |😈| inside".into()), 
                 End(TagEnd::Link),
                 End(TagEnd::Paragraph),
