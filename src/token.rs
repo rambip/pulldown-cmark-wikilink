@@ -72,6 +72,8 @@ pub struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
+    /// creates a lexer that start at the begening of `source`,
+    /// but the byte index innitaliased at `index`
     pub fn new_at(source: &'a str, index: usize) -> Lexer<'a> {
         Lexer {
             source: source.chars(),

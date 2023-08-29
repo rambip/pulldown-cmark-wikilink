@@ -13,12 +13,46 @@ use core::ops::Range;
 use core::iter::Peekable;
 use std::vec;
 
-pub struct Parser<'a, 'b> {
+
+struct TextJoiner<'a, 'b> {
     source: &'a str,
-    events: Peekable<pulldown_cmark::OffsetIter<'a, 'b>>,
+    parser: Peekable<pulldown_cmark::OffsetIter<'a, 'b>>,
+}
+
+impl<'a, 'b> TextJoiner<'a, 'b> {
+    fn new_ext(source: &'a str, options: Options) -> Self {
+        Self {
+            source,
+            parser: pulldown_cmark::Parser::new_ext(source, options)
+                .into_offset_iter()
+                .peekable(),
+        }
+    }
+}
+
+impl<'a, 'b> Iterator for TextJoiner<'a, 'b> {
+    type Item=(Event<'a>, Range<usize>);
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.parser.peek()? {
+            (Event::Text(_), range) => {
+                let start = range.start;
+                let mut end = range.end;
+                while let Some((Event::Text(_), _)) = self.parser.peek() {
+                    end = self.parser.next().unwrap().1.end;
+                }
+
+                Some((Event::Text(self.source[start..end].into()), start..end))
+
+            },
+            _ => self.parser.next()
+        }
+    }
+}
+
+pub struct WikiParser<'a, 'b> {
+    source: &'a str,
     lexer: Peekable<Lexer<'b>>,
     buffer: vec::IntoIter<(Event<'a>, Range<usize>)>,
-    wikilinks: bool,
 }
 
 
@@ -40,54 +74,14 @@ impl ParseError {
 }
 
 
-impl<'a, 'b> Parser<'a, 'b> {
-    /// Creates a new event iterator for a markdown string with given options
-    pub fn new_ext(source: &'a str, options: Options, wikilinks: bool) -> Self {
+impl<'a, 'b> WikiParser<'a, 'b> 
+    where 'a: 'b
+    {
+    pub fn new(source: &'a str, range: Range<usize>) -> Self {
         Self {
             source,
-            lexer: Lexer::new_at("", 0).peekable(),
-            events: pulldown_cmark::Parser::new_ext(source, options)
-                .into_offset_iter()
-                .peekable(),
-            buffer: Vec::new().into_iter(),
-            wikilinks,
-        }
-    }
-
-    /// Consumes the event iterator and produces an iterator that produces
-    /// `(Event, Range)` pairs, where the `Range` value maps to the corresponding
-    /// range in the markdown source.
-    pub fn into_offset_iter(self) -> OffsetIter<'a, 'b> {
-        OffsetIter {inner: self}
-    }
-
-    /// `self.peek_token()` returns the `Some(Ok(t))` if we are currently reading 
-    /// the token `t` in a text event.
-    /// if we are currently reading an event `e`, returns `Some(Err(e))`
-    fn peek_token(&mut self) -> Option<Result<&(Token, Range<usize>), (Event<'a>, Range<usize>)>> 
-      {
-        // the buffer created by the wikilink parser (second pass)
-        if let Some((x, r)) = self.buffer.next() {
-            return Some(Err((x, r)))
-        };
-
-        if self.lexer.peek().is_some(){
-            return self.lexer.peek().map(Ok)
-        }
-
-        match self.events.next()? {
-            (Event::Text(_), r) => {
-                let start = r.start;
-                let mut end = r.end;
-                while let Some((Event::Text(_) ,r2)) = self.events.peek(){
-                    end = r2.end;
-                    self.events.next();
-                };
-                self.lexer = Lexer::new_at(&self.source[start..end], r.start)
-                    .peekable();
-                self.peek_token()
-            },
-            t => Some(Err(t)),
+            lexer: Lexer::new_at(&source[range.clone()], range.start).peekable(),
+            buffer: Vec::new().into_iter()
         }
     }
 
@@ -181,25 +175,28 @@ impl<'a, 'b> Parser<'a, 'b> {
             }
         }
     }
+}
 
-    fn next_with_offset(&mut self) -> Option<(Event::<'a>, Range<usize>)> {
-
-        if !self.wikilinks {
-            return self.events.next()
+impl<'a, 'b> Iterator for WikiParser<'a, 'b> where 'a: 'b {
+    type Item = (Event<'a>, Range<usize>);
+    fn next(&mut self) -> Option<Self::Item> {
+        // returns the last group of events that was created
+        if let Some((e, range)) = self.buffer.next() {
+            return Some((e, range))
         };
 
-        let token = match self.peek_token()? {
-            Ok(x) => x,
-            Err(e) => return Some(e),
+        // suppress useless newlines
+        while let Some((Token::NewLine, _)) = self.lexer.peek() {
+            self.lexer.next();
         };
 
-        match token {
+        match self.lexer.peek()? {
             (LLBra, x) => {
                 let _start = x.start.clone();
                 match self.parse_wikilink() {
                     Ok(b) => {
                         self.buffer = b.into_iter();
-                        self.next_with_offset()
+                        self.buffer.next()
                     },
                     Err(e) => {
                         let r = match e {
@@ -210,7 +207,6 @@ impl<'a, 'b> Parser<'a, 'b> {
                     }
                 }
             },
-            (NewLine, _) => self.next_with_offset(),
             _ => {
                 let r = self.parse_text();
                 Some((Event::Text(self.source[r.clone()].into()), r))
@@ -219,23 +215,88 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 }
 
+pub struct Parser<'a, 'b> {
+    source: &'a str,
+    wikilinks: bool,
+    events: TextJoiner<'a, 'b>,
+    buffer: vec::IntoIter<(Event<'a>, Range<usize>)>,
+}
+
+impl<'a, 'b> Parser<'a, 'b> {
+    /// Creates a new event iterator for a markdown string with given options
+    pub fn new_ext(source: &'a str, options: Options, wikilinks: bool) -> Self {
+        Self {
+            source,
+            wikilinks,
+            events: TextJoiner::new_ext(source, options),
+            buffer: Vec::new().into_iter()
+        }
+    }
+
+    /// Consumes the event iterator and produces an iterator that produces
+    /// `(Event, Range)` pairs, where the `Range` value maps to the corresponding
+    /// range in the markdown source.
+    pub fn into_offset_iter(self) -> OffsetIter<'a, 'b> {
+        OffsetIter {
+            source: self.source,
+            wikilinks: self.wikilinks,
+            events: self.events,
+            buffer: self.buffer
+        }
+    }
+}
+
 
 impl<'a, 'b> Iterator for Parser<'a, 'b> {
     type Item = Event<'a>;
     fn next(&mut self) -> Option<Self::Item> {
-        self.next_with_offset().map(|x| x.0)
+        if !self.wikilinks {
+            return Some(self.events.next()?.0)
+        }
+
+        if let Some((x, _)) = self.buffer.next() {
+            return Some(x)
+        }
+
+        match self.events.next()? {
+            (Event::Text(_), range) => {
+                self.buffer = WikiParser::new(self.source, range)
+                    .collect::<Vec<_>>()
+                    .into_iter();
+                Some(self.buffer.next()?.0)
+            }
+            (other, _) => return Some(other)
+        }
     }
 }
 
 pub struct OffsetIter<'a, 'b> {
-    inner: Parser<'a, 'b>,
+    source: &'a str,
+    wikilinks: bool,
+    events: TextJoiner<'a, 'b>,
+    buffer: vec::IntoIter<(Event<'a>, Range<usize>)>,
 }
 
 impl<'a, 'b> Iterator for OffsetIter<'a, 'b> {
     type Item = (Event<'a>, Range<usize>);
-
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next_with_offset()
+        if !self.wikilinks {
+            return self.events.next()
+        }
+
+        if let Some(x) = self.buffer.next() {
+            return Some(x)
+        }
+
+        match self.events.next()? {
+            (Event::Text(_), range) => {
+                self.buffer = WikiParser::new(self.source, range)
+                    .collect::<Vec<_>>()
+                    .into_iter();
+                self.buffer.next()
+            }
+            other => return Some(other)
+        }
     }
 }
 
@@ -265,6 +326,23 @@ mod tests {
                    (End(TagEnd::Link), 20..28),
                    (End(TagEnd::Paragraph), 0..28),
         ]);
+    }
+
+    #[test]
+    fn parse_in_header() {
+        let s = "---\n[[wikilink]]\n---";
+        let events: Vec<_> = 
+            Parser::new_ext(s, Options::all(), true)
+            .collect();
+
+        assert_eq!(events,
+                   vec![
+                       Start(Tag::MetadataBlock(MetadataBlockKind::YamlStyle)),
+                       Start(Tag::Link { link_type: Inline, dest_url: "wikilink".into(), title: "wiki".into(), id: "".into() }), 
+                       Text("wikilink".into()), 
+                       End(TagEnd::Link), 
+                       End(TagEnd::MetadataBlock(MetadataBlockKind::YamlStyle))]
+                   )
     }
 
 
