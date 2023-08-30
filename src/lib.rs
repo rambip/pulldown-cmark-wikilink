@@ -220,6 +220,8 @@ pub struct Parser<'a, 'b> {
     wikilinks: bool,
     events: TextJoiner<'a, 'b>,
     buffer: vec::IntoIter<(Event<'a>, Range<usize>)>,
+    inside_metadata: bool,
+    inside_codeblock: bool,
 }
 
 impl<'a, 'b> Parser<'a, 'b> {
@@ -229,7 +231,9 @@ impl<'a, 'b> Parser<'a, 'b> {
             source,
             wikilinks,
             events: TextJoiner::new_ext(source, options),
-            buffer: Vec::new().into_iter()
+            buffer: Vec::new().into_iter(),
+            inside_metadata: false,
+            inside_codeblock: false,
         }
     }
 
@@ -241,7 +245,9 @@ impl<'a, 'b> Parser<'a, 'b> {
             source: self.source,
             wikilinks: self.wikilinks,
             events: self.events,
-            buffer: self.buffer
+            buffer: self.buffer,
+            inside_metadata: self.inside_metadata,
+            inside_codeblock: self.inside_codeblock
         }
     }
 }
@@ -259,12 +265,31 @@ impl<'a, 'b> Iterator for Parser<'a, 'b> {
         }
 
         match self.events.next()? {
+            (Event::End(TagEnd::MetadataBlock(k)), _) if self.inside_metadata => {
+                self.inside_metadata = true;
+                Some(Event::End(TagEnd::MetadataBlock(k)))
+            },
+            (Event::End(TagEnd::CodeBlock), _) if self.inside_metadata => {
+                self.inside_codeblock = true;
+                Some(Event::End(TagEnd::CodeBlock))
+            },
+            (Event::Text(x), _) if self.inside_metadata || self.inside_codeblock => {
+                Some(Event::Text(x))
+            },
+            (Event::Start(Tag::MetadataBlock(k)), _) => {
+                self.inside_metadata = true;
+                Some(Event::Start(Tag::MetadataBlock(k)))
+            },
+            (Event::Start(Tag::CodeBlock(k)), _) => {
+                self.inside_codeblock = true;
+                Some(Event::Start(Tag::CodeBlock(k)))
+            },
             (Event::Text(_), range) => {
                 self.buffer = WikiParser::new(self.source, range)
                     .collect::<Vec<_>>()
                     .into_iter();
                 Some(self.buffer.next()?.0)
-            }
+            },
             (other, _) => return Some(other)
         }
     }
@@ -275,6 +300,8 @@ pub struct OffsetIter<'a, 'b> {
     wikilinks: bool,
     events: TextJoiner<'a, 'b>,
     buffer: vec::IntoIter<(Event<'a>, Range<usize>)>,
+    inside_metadata: bool,
+    inside_codeblock: bool,
 }
 
 impl<'a, 'b> Iterator for OffsetIter<'a, 'b> {
@@ -289,13 +316,32 @@ impl<'a, 'b> Iterator for OffsetIter<'a, 'b> {
         }
 
         match self.events.next()? {
+            (Event::End(TagEnd::MetadataBlock(k)), r) if self.inside_metadata => {
+                self.inside_metadata = false;
+                Some((Event::End(TagEnd::MetadataBlock(k)), r))
+            },
+            (Event::End(TagEnd::CodeBlock), r) if self.inside_metadata => {
+                self.inside_codeblock = false;
+                Some((Event::End(TagEnd::CodeBlock), r))
+            },
+            (Event::Text(x), r) if self.inside_metadata || self.inside_codeblock => {
+                Some((Event::Text(x), r))
+            },
             (Event::Text(_), range) => {
                 self.buffer = WikiParser::new(self.source, range)
                     .collect::<Vec<_>>()
                     .into_iter();
-                self.buffer.next()
-            }
-            other => return Some(other)
+                Some(self.buffer.next()?)
+            },
+            (Event::Start(Tag::MetadataBlock(k)), r) => {
+                self.inside_metadata = true;
+                Some((Event::Start(Tag::MetadataBlock(k)), r))
+            },
+            (Event::Start(Tag::CodeBlock(k)), r) => {
+                self.inside_codeblock = true;
+                Some((Event::Start(Tag::CodeBlock(k)), r))
+            },
+            (other, r) => return Some((other, r))
         }
     }
 }
@@ -329,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_in_header() {
+    fn parse_in_metadata() {
         let s = "---\n[[wikilink]]\n---";
         let events: Vec<_> = 
             Parser::new_ext(s, Options::all(), true)
@@ -338,9 +384,7 @@ mod tests {
         assert_eq!(events,
                    vec![
                        Start(Tag::MetadataBlock(MetadataBlockKind::YamlStyle)),
-                       Start(Tag::Link { link_type: Inline, dest_url: "wikilink".into(), title: "wiki".into(), id: "".into() }), 
-                       Text("wikilink".into()), 
-                       End(TagEnd::Link), 
+                       Text("[[wikilink]]\n".into()),
                        End(TagEnd::MetadataBlock(MetadataBlockKind::YamlStyle))]
                    )
     }
@@ -392,5 +436,29 @@ mod tests {
         let _events: Vec<_> = 
             Parser::new_ext(s, Options::all(), true)
             .collect();
+    }
+
+    #[test]
+    fn link_in_code(){
+        let s = "```\n[[]]\n```";
+
+        let events: Vec<_> = Parser::new_ext(s, Options::all(), true).collect();
+
+        assert_eq!(events, vec![
+                   Start(Tag::CodeBlock(CodeBlockKind::Fenced("".into()))), 
+                   Text("[[]]\n".into()), 
+                   End(TagEnd::CodeBlock)
+        ])
+    }
+
+    #[test]
+    fn link_in_math(){
+        let s = "$$[[]]$$";
+
+        let events: Vec<_> = Parser::new_ext(s, Options::all(), true).collect();
+
+        assert_eq!(events, vec![
+            Start(Tag::Paragraph), Math(MathMode::Display, "[[]]".into()), End(TagEnd::Paragraph)
+        ])
     }
 }
