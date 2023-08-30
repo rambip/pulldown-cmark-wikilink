@@ -266,11 +266,11 @@ impl<'a, 'b> Iterator for Parser<'a, 'b> {
 
         match self.events.next()? {
             (Event::End(TagEnd::MetadataBlock(k)), _) if self.inside_metadata => {
-                self.inside_metadata = true;
+                self.inside_metadata = false;
                 Some(Event::End(TagEnd::MetadataBlock(k)))
             },
-            (Event::End(TagEnd::CodeBlock), _) if self.inside_metadata => {
-                self.inside_codeblock = true;
+            (Event::End(TagEnd::CodeBlock), _) if self.inside_codeblock => {
+                self.inside_codeblock = false;
                 Some(Event::End(TagEnd::CodeBlock))
             },
             (Event::Text(x), _) if self.inside_metadata || self.inside_codeblock => {
@@ -320,7 +320,7 @@ impl<'a, 'b> Iterator for OffsetIter<'a, 'b> {
                 self.inside_metadata = false;
                 Some((Event::End(TagEnd::MetadataBlock(k)), r))
             },
-            (Event::End(TagEnd::CodeBlock), r) if self.inside_metadata => {
+            (Event::End(TagEnd::CodeBlock), r) if self.inside_codeblock => {
                 self.inside_codeblock = false;
                 Some((Event::End(TagEnd::CodeBlock), r))
             },
@@ -437,6 +437,52 @@ mod tests {
             Parser::new_ext(s, Options::all(), true)
             .collect();
     }
+
+    #[test]
+    fn link_after_meta(){
+        let s = "---\nmetadata: test\n---\n[[link]]";
+
+        let events: Vec<_> = Parser::new_ext(s, Options::all(), true).collect();
+
+        use MetadataBlockKind::*;
+
+        assert_eq!(events, vec![
+                   Start(Tag::MetadataBlock(YamlStyle)),
+                   Text("metadata: test\n".into()),
+                   End(TagEnd::MetadataBlock(YamlStyle)),
+                   Start(Tag::Paragraph),
+                   Start(Tag::Link { link_type: Inline,
+                       dest_url: "link".into(),
+                       title: "wiki".into(),
+                       id: "".into() }),
+                   Text("link".into()),
+                   End(TagEnd::Link),
+                   End(TagEnd::Paragraph)
+        ])
+    }
+
+    #[test]
+    fn link_after_code(){
+        let s = "```code\n```\n[[link]]";
+
+        let events: Vec<_> = Parser::new_ext(s, Options::all(), true).collect();
+
+        use CodeBlockKind::*;
+
+        assert_eq!(events, vec![
+                   Start(Tag::CodeBlock(Fenced("code".into()))),
+                   End(TagEnd::CodeBlock),
+                   Start(Tag::Paragraph),
+                   Start(Tag::Link { link_type: Inline,
+                       dest_url: "link".into(),
+                       title: "wiki".into(),
+                       id: "".into() }),
+                   Text("link".into()),
+                   End(TagEnd::Link),
+                   End(TagEnd::Paragraph)
+        ])
+    }
+
 
     #[test]
     fn link_in_code(){
