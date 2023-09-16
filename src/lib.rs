@@ -2,7 +2,12 @@
 
 
 pub use pulldown_cmark::Parser as _Parser;
+pub use pulldown_cmark::OffsetIter as _OffsetIter;
 pub use pulldown_cmark::*;
+
+// shadows the original types so that the user don't use the wrong one
+pub type Parser<'a, 'b> = ParserOffsetIter<'a, 'b>;
+pub type OffsetIter<'a, 'b> = ParserOffsetIter<'a, 'b>;
 
 mod token;
 use token::{Lexer, Token};
@@ -16,14 +21,14 @@ use std::vec;
 
 struct TextJoiner<'a, 'b> {
     source: &'a str,
-    parser: Peekable<pulldown_cmark::OffsetIter<'a, 'b>>,
+    parser: Peekable<_OffsetIter<'a, 'b>>,
 }
 
 impl<'a, 'b> TextJoiner<'a, 'b> {
     fn new_ext(source: &'a str, options: Options) -> Self {
         Self {
             source,
-            parser: pulldown_cmark::Parser::new_ext(source, options)
+            parser: _Parser::new_ext(source, options)
                 .into_offset_iter()
                 .peekable(),
         }
