@@ -34,6 +34,10 @@ impl<'a, 'b> Iterator for TextJoiner<'a, 'b> {
     type Item=(Event<'a>, Range<usize>);
     fn next(&mut self) -> Option<Self::Item> {
         match self.parser.peek()? {
+            (Event::Text(x), _) if x.is_empty() => {
+                self.parser.next();
+                self.next()
+            },
             (Event::Text(_), range) => {
                 let start = range.start;
                 let mut end = range.end;
@@ -215,7 +219,7 @@ impl<'a, 'b> Iterator for WikiParser<'a, 'b> where 'a: 'b {
     }
 }
 
-pub struct Parser<'a, 'b> {
+pub struct ParserOffsetIter<'a, 'b> {
     source: &'a str,
     wikilinks: bool,
     events: TextJoiner<'a, 'b>,
@@ -224,7 +228,7 @@ pub struct Parser<'a, 'b> {
     inside_codeblock: bool,
 }
 
-impl<'a, 'b> Parser<'a, 'b> {
+impl<'a, 'b> ParserOffsetIter<'a, 'b> {
     /// Creates a new event iterator for a markdown string with given options
     pub fn new_ext(source: &'a str, options: Options, wikilinks: bool) -> Self {
         Self {
@@ -237,78 +241,27 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
     }
 
-    /// Consumes the event iterator and produces an iterator that produces
-    /// `(Event, Range)` pairs, where the `Range` value maps to the corresponding
-    /// range in the markdown source.
-    pub fn into_offset_iter(self) -> OffsetIter<'a, 'b> {
-        OffsetIter {
-            source: self.source,
-            wikilinks: self.wikilinks,
-            events: self.events,
-            buffer: self.buffer,
-            inside_metadata: self.inside_metadata,
-            inside_codeblock: self.inside_codeblock
-        }
-    }
+    // /// Consumes the event iterator and produces an iterator that produces
+    // /// `(Event, Range)` pairs, where the `Range` value maps to the corresponding
+    // /// range in the markdown source.
+    // pub fn into_offset_iter(self) -> OffsetIter<'a, 'b> {
+    //     OffsetIter {
+    //         source: self.source,
+    //         wikilinks: self.wikilinks,
+    //         events: self.events,
+    //         buffer: self.buffer,
+    //         inside_metadata: self.inside_metadata,
+    //         inside_codeblock: self.inside_codeblock
+    //     }
+    // }
 }
 
 
-impl<'a, 'b> Iterator for Parser<'a, 'b> {
-    type Item = Event<'a>;
-    fn next(&mut self) -> Option<Self::Item> {
-        if !self.wikilinks {
-            return Some(self.events.next()?.0)
-        }
-
-        if let Some((x, _)) = self.buffer.next() {
-            return Some(x)
-        }
-
-        match self.events.next()? {
-            (Event::End(TagEnd::MetadataBlock(k)), _) if self.inside_metadata => {
-                self.inside_metadata = false;
-                Some(Event::End(TagEnd::MetadataBlock(k)))
-            },
-            (Event::End(TagEnd::CodeBlock), _) if self.inside_codeblock => {
-                self.inside_codeblock = false;
-                Some(Event::End(TagEnd::CodeBlock))
-            },
-            (Event::Text(x), _) if self.inside_metadata || self.inside_codeblock => {
-                Some(Event::Text(x))
-            },
-            (Event::Start(Tag::MetadataBlock(k)), _) => {
-                self.inside_metadata = true;
-                Some(Event::Start(Tag::MetadataBlock(k)))
-            },
-            (Event::Start(Tag::CodeBlock(k)), _) => {
-                self.inside_codeblock = true;
-                Some(Event::Start(Tag::CodeBlock(k)))
-            },
-            (Event::Text(_), range) => {
-                self.buffer = WikiParser::new(self.source, range)
-                    .collect::<Vec<_>>()
-                    .into_iter();
-                Some(self.buffer.next()?.0)
-            },
-            (other, _) => return Some(other)
-        }
-    }
-}
-
-pub struct OffsetIter<'a, 'b> {
-    source: &'a str,
-    wikilinks: bool,
-    events: TextJoiner<'a, 'b>,
-    buffer: vec::IntoIter<(Event<'a>, Range<usize>)>,
-    inside_metadata: bool,
-    inside_codeblock: bool,
-}
-
-impl<'a, 'b> Iterator for OffsetIter<'a, 'b> {
+impl<'a, 'b> Iterator for ParserOffsetIter<'a, 'b> {
     type Item = (Event<'a>, Range<usize>);
     fn next(&mut self) -> Option<Self::Item> {
         if !self.wikilinks {
-            return self.events.next()
+            return Some(self.events.next()?)
         }
 
         if let Some(x) = self.buffer.next() {
@@ -327,12 +280,6 @@ impl<'a, 'b> Iterator for OffsetIter<'a, 'b> {
             (Event::Text(x), r) if self.inside_metadata || self.inside_codeblock => {
                 Some((Event::Text(x), r))
             },
-            (Event::Text(_), range) => {
-                self.buffer = WikiParser::new(self.source, range)
-                    .collect::<Vec<_>>()
-                    .into_iter();
-                Some(self.buffer.next()?)
-            },
             (Event::Start(Tag::MetadataBlock(k)), r) => {
                 self.inside_metadata = true;
                 Some((Event::Start(Tag::MetadataBlock(k)), r))
@@ -341,10 +288,18 @@ impl<'a, 'b> Iterator for OffsetIter<'a, 'b> {
                 self.inside_codeblock = true;
                 Some((Event::Start(Tag::CodeBlock(k)), r))
             },
+            (Event::Text(_), range) => {
+                self.buffer = WikiParser::new(self.source, range)
+                    .collect::<Vec<_>>()
+                    .into_iter();
+
+                Some(self.buffer.next().expect("an empty text should not be possible here"))
+            },
             (other, r) => return Some((other, r))
         }
     }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -358,8 +313,7 @@ mod tests {
     fn parse_no_alias() {
         let s = "here is a wikilink: [[link]]";
         let events: Vec<_> =
-            Parser::new_ext(s, Options::all(), true)
-            .into_offset_iter()
+            ParserOffsetIter::new_ext(s, Options::all(), true)
             .collect();
 
         println!("{events:?}");
@@ -378,7 +332,8 @@ mod tests {
     fn parse_in_metadata() {
         let s = "---\n[[wikilink]]\n---";
         let events: Vec<_> = 
-            Parser::new_ext(s, Options::all(), true)
+            ParserOffsetIter::new_ext(s, Options::all(), true)
+            .map(|(x, _)| x)
             .collect();
 
         assert_eq!(events,
@@ -401,7 +356,8 @@ mod tests {
         println!("{original_events:?}");
 
         let events: Vec<_> = 
-            Parser::new_ext(s, Options::all(), true)
+            ParserOffsetIter::new_ext(s, Options::all(), true)
+            .map(|(x, _)| x)
             .collect();
 
         println!("{events:?}");
@@ -434,7 +390,7 @@ mod tests {
         assert_eq!(empty_text_events.count(), 3);
 
         let _events: Vec<_> = 
-            Parser::new_ext(s, Options::all(), true)
+            ParserOffsetIter::new_ext(s, Options::all(), true)
             .collect();
     }
 
@@ -442,7 +398,9 @@ mod tests {
     fn link_after_meta(){
         let s = "---\nmetadata: test\n---\n[[link]]";
 
-        let events: Vec<_> = Parser::new_ext(s, Options::all(), true).collect();
+        let events: Vec<_> = ParserOffsetIter::new_ext(s, Options::all(), true)
+            .map(|(x, _)| x)
+            .collect();
 
         use MetadataBlockKind::*;
 
@@ -465,7 +423,9 @@ mod tests {
     fn link_after_code(){
         let s = "```code\n```\n[[link]]";
 
-        let events: Vec<_> = Parser::new_ext(s, Options::all(), true).collect();
+        let events: Vec<_> = ParserOffsetIter::new_ext(s, Options::all(), true)
+            .map(|(x, _)| x)
+            .collect();
 
         use CodeBlockKind::*;
 
@@ -488,7 +448,9 @@ mod tests {
     fn link_in_code(){
         let s = "```\n[[]]\n```";
 
-        let events: Vec<_> = Parser::new_ext(s, Options::all(), true).collect();
+        let events: Vec<_> = ParserOffsetIter::new_ext(s, Options::all(), true)
+            .map(|(x, _)| x)
+            .collect();
 
         assert_eq!(events, vec![
                    Start(Tag::CodeBlock(CodeBlockKind::Fenced("".into()))), 
@@ -501,10 +463,28 @@ mod tests {
     fn link_in_math(){
         let s = "$$[[]]$$";
 
-        let events: Vec<_> = Parser::new_ext(s, Options::all(), true).collect();
+        let events: Vec<_> = ParserOffsetIter::new_ext(s, Options::all(), true)
+            .map(|(x, _)| x)
+            .collect();
 
         assert_eq!(events, vec![
             Start(Tag::Paragraph), Math(MathMode::Display, "[[]]".into()), End(TagEnd::Paragraph)
         ])
+    }
+
+    #[test]
+    fn table(){
+        // this is mainly a no-regression test.
+        // It has to do with empty text events
+        let s = "## Style
+| unstyled | styled    |
+| :-----:  | ------    |
+| bold     | **bold**  |
+| italics  | *italics* |
+| strike   | ~strike~  |
+";
+
+        assert_eq!(ParserOffsetIter::new_ext(s, Options::all(), true).count(),
+                43);
     }
 }
