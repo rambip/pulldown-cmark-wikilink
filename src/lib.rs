@@ -1,6 +1,3 @@
-#![feature(array_into_iter_constructors)]
-
-
 pub use pulldown_cmark::Parser as _Parser;
 pub use pulldown_cmark::OffsetIter as _OffsetIter;
 pub use pulldown_cmark::*;

@@ -12,7 +12,7 @@
         eachDefaultSystem (system:
             let overlays = [rust-overlay.overlays.default];
                 pkgs = import nixpkgs {inherit system overlays;};
-                rust-toolchain = pkgs.rust-bin.nightly.latest.minimal;
+                rust-toolchain = pkgs.rust-bin.stable.latest.minimal;
                 buildPackage = (
                 pkgs.callPackage naersk {
                     cargo = rust-toolchain;
